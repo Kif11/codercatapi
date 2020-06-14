@@ -6,6 +6,6 @@ build:
 
 deploy:
 	make build
-	ssh kiko@ubkif "pm2 stop codercatapi"
-	scp codercatapi kiko@ubkif:/home/kiko/codercatapi/
-	ssh kiko@ubkif "pm2 restart codercatapi"
+	ssh -t kiko@codercat.tk "sudo systemctl stop codercatapi"
+	scp codercatapi kiko@codercat.tk:/home/kiko/codercatapi/
+	ssh -t kiko@codercat.tk "sudo systemctl restart codercatapi"

@@ -7,7 +7,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/smtp"
+	"os"
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -43,6 +46,26 @@ func find(slice []string, val string) (int, bool) {
 	return -1, false
 }
 
+func sendEmail(recipients []string, subject string, body string) error {
+	from := os.Getenv("EMAIL_ACCOUNT")
+	pass := os.Getenv("EMAIL_PASSWORD")
+
+	msg := "From: " + from + "\n" +
+		"To: " + strings.Join(recipients, ", ") + "\n" +
+		"Subject:" + subject +
+		"\n\n" +
+		body
+
+	smtpAuth := smtp.PlainAuth("", from, pass, "smtp.gmail.com")
+
+	err := smtp.SendMail("smtp.gmail.com:587", smtpAuth, from, recipients, []byte(msg))
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func validateEmail(email string) error {
 	var rxEmail = regexp.MustCompile("^[a-zA-Z0-9.!#$%&'*+\\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$")
 
@@ -65,6 +88,7 @@ func decodeBody(body io.ReadCloser, dst interface{}) error {
 }
 
 func subscribeHandler(w http.ResponseWriter, r *http.Request) {
+	notificationRecipients, sendNotifications := os.LookupEnv("NOTIFICATION_RECIPIENTS")
 	applicantReq := &applicantRequest{}
 
 	if err := decodeBody(r.Body, applicantReq); err != nil {
@@ -84,6 +108,24 @@ func subscribeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Send email notification
+	if sendNotifications {
+		body := fmt.Sprintf("You got new Flux applicant!\n\n")
+
+		body += fmt.Sprintf("Aplicant email: %s\n", applicantReq.Email)
+		body += "Aplicant answers:\n"
+
+		for _, q := range applicantReq.Questions {
+			body += fmt.Sprintf("    %s - %s\n", q.Key, q.Value)
+		}
+
+		err = sendEmail(strings.Split(notificationRecipients, ","), "🎉 New Flux Subscription", body)
+		if err != nil {
+			returnError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+	}
+
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -100,7 +142,7 @@ func returnError(w http.ResponseWriter, header int, msg string) {
 	w.Write(js)
 }
 
-var allowedOrigins = []string{"http://localhost:3000", "https://codercatclub.github.io"}
+var allowedOrigins = []string{"http://localhost:3000", "https://codercatclub.github.io", "https://codercat.tk"}
 
 func corsMiddleware(h http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,8 +170,13 @@ func corsMiddleware(h http.Handler) http.Handler {
 func main() {
 	var err error
 
+	mongoHost, ok := os.LookupEnv("MONGO_HOST")
+	if !ok {
+		mongoHost = "mongodb://localhost:27017"
+	}
+
 	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
-	client, err = mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
+	client, err = mongo.Connect(ctx, options.Client().ApplyURI(mongoHost))
 	if err != nil {
 		panic(err)
 	}
@@ -138,6 +185,7 @@ func main() {
 
 	r := mux.NewRouter()
 
+	// Routes
 	r.HandleFunc("/v1/subscribe", subscribeHandler).Methods("POST", "OPTIONS")
 
 	r.Use(corsMiddleware)
